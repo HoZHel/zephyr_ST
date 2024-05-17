@@ -1,0 +1,12 @@
+# STMicroelectronics STM32WB07 MCU
+
+# Copyright (c) 2024 STMicroelectronics
+# SPDX-License-Identifier: Apache-2.0
+
+if SOC_STM32WB07XX
+
+# TODO: this is the number of NVIC user IRQ; is that correct?
+config NUM_IRQS
+	default 32
+
+endif # SOC_STM32WB07XX

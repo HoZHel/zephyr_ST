@@ -1,0 +1,15 @@
+# STMicroelectronics STM32WB0 MCU series
+
+# Copyright (c) 2024 STMicroelectronics
+# SPDX-License-Identifier: Apache-2.0
+
+if SOC_SERIES_STM32WB0
+
+# STM32WB0 MR_BLE radio supports only
+# 128 simultaneous active connections
+config BT_MAX_CONN
+	range 1 128
+
+rsource "Kconfig.defconfig.stm32wb0*"
+
+endif # SOC_SERIES_STM32WB0
