@@ -1,0 +1,53 @@
+# Copyright (c) 2024 STMicroelectronics
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  STM32WB0 LSI Clock
+
+  The STM32WB0 MCUs are equipped with a regular RC LSI clock with a frequency of 24~40kHz.
+  The SoCs are also equipped with hardware to perform LSI frequency measurement, which
+  allows to adapt all frequency-based calculations to a somewhat accurate value, ensuring
+  that the software does not get too much out of sync with real-world time.
+
+  This binding exposes several properties related to LSI frequency measurement options.
+
+compatible: "st,stm32wb0-lsi-clock"
+
+include: [fixed-clock.yaml]
+
+properties:
+  measurement-window-size:
+    type: int
+    required: true
+    description: |
+      Size of the measurement window for LSI calibration (in LSI periods)
+
+      The measurement process involves waiting for a certain amount of LSI periods
+      to occur, in order to determine precisely the LSI period, and thus frequency.
+
+      This property controls how much LSI periods are required for each measure.
+      Bigger window sizes increase accuracy of the measure, but increase the time
+      needed to complete it. Since fLSI >= 24kHz, increasing the measurement window
+      size makes each measure roughly 42µs slower in the worst case.
+
+      This property must be between 16 and 256.
+
+  runtime-measurement-interval:
+    type: int
+    description: |
+      Interval at which runtime measurements should be performed, in milliseconds
+
+      Since the LSI RC frequency is affected by temperature, which is not stable
+      across time, it is highly recommended to perform measurements of the LSI
+      frequency at regular intervals in order to obtain better accuracy.
+
+      This property enables runtime LSI measurement if present. In this case,
+      a background thread is created and performs LSI measurements, sleeping
+      the amount of time specified in this property between each measure. This
+      thread is also tasked with updating the control registers of peripherals
+      affected by slow clock drift such as RTC or IWDG, in collaboration with
+      the peripherals' drivers. Note that this increases the memory footprint
+      of the clock control driver and can increase power consumption.
+
+      If this property is not present, runtime LSI measurement is disabled, and
+      the single measure performed at boot
