@@ -40,11 +40,19 @@ LOG_MODULE_REGISTER(stm32, CONFIG_GPIO_LOG_LEVEL);
 /**
  * @brief EXTI interrupt callback
  */
-static void gpio_stm32_isr(int line, void *arg)
+static void gpio_stm32_isr(STM32_EXTI_API_TYPE line, void *arg)
 {
 	struct gpio_stm32_data *data = arg;
 
+#if !defined(CONFIG_SOC_SERIES_STM32WB0)
 	gpio_fire_callbacks(&data->cb, data->dev, BIT(line));
+#else
+	/* For port A pins, line == (1 << pin number).
+	 * For port B pins, line == (1 << (pin number) + 16)
+	 */
+	uint32_t pin_bit = (line > 0x8000) ? (line >> 16) : line;
+	gpio_fire_callbacks(&data->cb, data->dev, pin_bit);
+#endif
 }
 
 /**
@@ -157,6 +165,61 @@ static inline uint32_t stm32_pinval_get(int pin)
 	return pinval;
 }
 
+static inline void ll_gpio_set_pin_pull(GPIO_TypeDef *GPIOx, uint32_t Pin, uint32_t Pull) {
+#if !defined(CONFIG_SOC_SERIES_STM32WB0)
+	LL_GPIO_SetPinPull(GPIOx, Pin, Pull);
+#else
+	/* On STM32WB0, the pull-up/pull-down registers are in PWRC
+	 * instead of GPIO, so we cannot use LL_GPIO_SetPinPull.
+	 *
+	 * This reasonably well optimized implementation emulates the
+	 * same behaviour, using knowledge of how the PWRC registers
+	 * are laid out, and where in memory for the GPIO controllers
+	 * are located to be fast.
+	 */
+	/* This evaluates to 0 if GPIOx == GPIOA and 2 if GPIOx == GPIOB... */
+	const uint32_t reg_offset = (((uint32_t)GPIOx - AHBPERIPH_BASE) >> 19U);
+	/* ...thus this points to PUCRA or PUCRB depending on GPIOx */
+	volatile uint32_t *const PUCRx = &PWR->PUCRA + reg_offset;
+
+	/* TODO: check this is well optimized by the compiler */
+	const uint32_t pull_up_bit = ((Pull & LL_GPIO_PULL_UP) != 0) ? Pin : 0;
+	const uint32_t pull_down_bit = ((Pull & LL_GPIO_PULL_DOWN) != 0) ? Pin : 0;
+
+	MODIFY_REG(PUCRx[0], Pin, pull_up_bit);
+	MODIFY_REG(PUCRx[1], Pin, pull_down_bit); /* PUCRx[1] is PDCRx */
+#endif /* !CONFIG_SOC_SERIES_STM32WB0 */
+}
+
+static inline uint32_t ll_gpio_get_pin_pull(GPIO_TypeDef *GPIOx, uint32_t Pin)
+{
+#if !defined(CONFIG_SOC_SERIES_STM32WB0)
+	return LL_GPIO_GetPinPull(GPIOx, Pin);
+#elif 0
+	/* TODO: compare this "optimized version" to naïve below */
+	/* See ll_gpio_set_pin_pull for details */
+	const uint32_t reg_offset = (((uint32_t)GPIOx - AHBPERIPH_BASE) >> 19U);
+	volatile uint32_t *const PUCRx = &PWR->PUCRA + reg_offset;
+
+	if ((PUCRx[0] & Pin) != 0) {
+		return LL_GPIO_PULL_UP;
+	} else if ((PUCRx[1] & Pin) != 0) {
+		return LL_GPIO_PULL_DOWN;
+	} else {
+		return LL_GPIO_PULL_NONE;
+	}
+#else
+	uint32_t gpio = (GPIOx == GPIOA) ? LL_PWR_GPIO_A : LL_PWR_GPIO_B;
+	if (LL_PWR_IsEnabledGPIOPullUp(gpio, Pin)) {
+		return LL_GPIO_PULL_UP;
+	} else if (LL_PWR_IsEnabledGPIOPullDown(gpio, Pin)) {
+		return LL_GPIO_PULL_DOWN;
+	} else {
+		return LL_GPIO_PULL_NO;
+	}
+#endif /* !CONFIG_SOC_SERIES_STM32WB0 */
+}
+
 /**
  * @brief Configure the hardware.
  */
@@ -253,7 +316,7 @@ static void gpio_stm32_configure_raw(const struct device *dev, int pin,
 
 	LL_GPIO_SetPinSpeed(gpio, pin_ll, ospeed >> STM32_OSPEEDR_SHIFT);
 
-	LL_GPIO_SetPinPull(gpio, pin_ll, pupd >> STM32_PUPDR_SHIFT);
+	ll_gpio_set_pin_pull(gpio, pin_ll, pupd >> STM32_PUPDR_SHIFT);
 
 	if (mode == STM32_MODER_ALT_MODE) {
 		if (pin < 8) {
@@ -294,6 +357,16 @@ static int gpio_stm32_clock_request(const struct device *dev, bool on)
 	return ret;
 }
 
+/* These functions cannot be compiled for WB0.
+ *
+ *'gpio_stm32_enable_int' should really be called something like
+ * 'gpio_stm32_exti_port_select', as all it does is configuring
+ * the EXTI to select the proper port for the pin's EXTI line.
+ *
+ * The STM32WB0 series has per-pin EXTI lines instead of per-pin-number lines.
+ * There are no "EXTI sources" to select: they are hardwired.
+ */
+#if !defined(CONFIG_SOC_SERIES_STM32WB0)
 static inline uint32_t gpio_stm32_pin_to_exti_line(int pin)
 {
 #if defined(CONFIG_SOC_SERIES_STM32L0X) || \
@@ -411,6 +484,8 @@ static int gpio_stm32_enable_int(int port, int pin)
 
 	return 0;
 }
+
+#endif /* CONFIG_SOC_SERIES_STM32WB0 */
 
 static int gpio_stm32_port_get_raw(const struct device *dev, uint32_t *value)
 {
@@ -607,7 +682,7 @@ static int gpio_stm32_get_config(const struct device *dev,
 
 	pin_ll = stm32_pinval_get(pin);
 	pin_config.type = LL_GPIO_GetPinOutputType(gpio, pin_ll);
-	pin_config.pupd = LL_GPIO_GetPinPull(gpio, pin_ll);
+	pin_config.pupd = ll_gpio_get_pin_pull(gpio, pin_ll);
 	pin_config.mode = LL_GPIO_GetPinMode(gpio, pin_ll);
 	pin_config.out_state = LL_GPIO_IsOutputPinSet(gpio, pin_ll);
 
@@ -624,60 +699,91 @@ static int gpio_stm32_pin_interrupt_configure(const struct device *dev,
 {
 	const struct gpio_stm32_config *cfg = dev->config;
 	struct gpio_stm32_data *data = dev->data;
-	int edge = 0;
+	uint32_t exti_line;
+	uint32_t trigger = 0;
 	int err = 0;
+
+#if defined(CONFIG_SOC_SERIES_STM32WB0)
+	exti_line = stm32wb0_gpio_port_pin_to_intr_line(cfg->port, pin);
+#else
+	exti_line = pin;
+#endif
 
 #ifdef CONFIG_GPIO_ENABLE_DISABLE_INTERRUPT
 	if (mode == GPIO_INT_MODE_DISABLE_ONLY) {
-		stm32_exti_disable(pin);
+		stm32_exti_disable(exti_line);
 		goto exit;
 	} else if (mode == GPIO_INT_MODE_ENABLE_ONLY) {
-		stm32_exti_enable(pin);
+		stm32_exti_enable(exti_line);
 		goto exit;
 	}
 #endif /* CONFIG_GPIO_ENABLE_DISABLE_INTERRUPT */
 
 	if (mode == GPIO_INT_MODE_DISABLED) {
+#if !defined(CONFIG_SOC_SERIES_STM32WB0)
 		if (gpio_stm32_get_exti_source(pin) == cfg->port) {
-			stm32_exti_disable(pin);
-			stm32_exti_unset_callback(pin);
-			stm32_exti_trigger(pin, STM32_EXTI_TRIG_NONE);
+#endif
+			stm32_exti_disable(exti_line);
+			stm32_exti_unset_callback(exti_line);
+			stm32_exti_trigger(exti_line, STM32_EXTI_TRIG_NONE);
+#if !defined(CONFIG_SOC_SERIES_STM32WB0)
 		}
 		/* else: No irq source configured for pin. Nothing to disable */
+#endif
 		goto exit;
 	}
 
-	/* Level trigger interrupts not supported */
+	/* Level trigger interrupts not supported except on WB0 */
 	if (mode == GPIO_INT_MODE_LEVEL) {
+#if !defined(CONFIG_SOC_SERIES_STM32WB0)
 		err = -ENOTSUP;
 		goto exit;
+#else /* defined(CONFIG_SOC_SERIES_STM32WB0) */
+		switch(trig) {
+		case GPIO_INT_TRIG_LOW:
+			trigger = STM32_GPIO_IRQ_TRIG_LOW_LEVEL;
+			break;
+		case GPIO_INT_TRIG_HIGH:
+			trigger = STM32_GPIO_IRQ_TRIG_HIGH_LEVEL;
+			break;
+		default:
+			err = -EINVAL;
+			goto exit;
+		}
+#endif /* !defined(CONFIG_SOC_SERIES_STM32WB0)*/
+	} else if (mode == GPIO_INT_MODE_EDGE) {
+		switch (trig) {
+		case GPIO_INT_TRIG_LOW:
+			trigger = STM32_EXTI_TRIG_FALLING;
+			break;
+		case GPIO_INT_TRIG_HIGH:
+			trigger = STM32_EXTI_TRIG_RISING;
+			break;
+		case GPIO_INT_TRIG_BOTH:
+			trigger = STM32_EXTI_TRIG_BOTH;
+			break;
+		default:
+			err = -EINVAL;
+			goto exit;
+		}
+	} else {
+		CODE_UNREACHABLE;
 	}
 
-	if (stm32_exti_set_callback(pin, gpio_stm32_isr, data) != 0) {
+	if (stm32_exti_set_callback(exti_line, gpio_stm32_isr, data) != 0) {
 		err = -EBUSY;
 		goto exit;
 	}
 
-	switch (trig) {
-	case GPIO_INT_TRIG_LOW:
-		edge = STM32_EXTI_TRIG_FALLING;
-		break;
-	case GPIO_INT_TRIG_HIGH:
-		edge = STM32_EXTI_TRIG_RISING;
-		break;
-	case GPIO_INT_TRIG_BOTH:
-		edge = STM32_EXTI_TRIG_BOTH;
-		break;
-	default:
-		err = -EINVAL;
+#if !defined(CONFIG_SOC_SERIES_STM32WB0)
+	err = gpio_stm32_enable_int(cfg->port, pin);
+	if (err != 0)
 		goto exit;
-	}
+#endif /* CONFIG_SOC_SERIES_STM32WB0 */
 
-	gpio_stm32_enable_int(cfg->port, pin);
+	stm32_exti_trigger(exti_line, trigger);
 
-	stm32_exti_trigger(pin, edge);
-
-	stm32_exti_enable(pin);
+	stm32_exti_enable(exti_line);
 
 exit:
 	return err;
