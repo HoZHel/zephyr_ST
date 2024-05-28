@@ -82,7 +82,8 @@ config CLOCK_STM32_MCO1_SRC_HSE
 	           SOC_SERIES_STM32L4X || \
 	           SOC_SERIES_STM32H7X || \
 	           SOC_SERIES_STM32H7RSX || \
-	           SOC_SERIES_STM32H5X
+	           SOC_SERIES_STM32H5X || \
+		   SOC_SERIES_STM32WB0
 	help
 	  Use HSE as source of MCO1
 
@@ -105,7 +106,8 @@ config CLOCK_STM32_MCO1_SRC_HSI
 	           SOC_SERIES_STM32F7X || \
 	           SOC_SERIES_STM32H7X || \
 	           SOC_SERIES_STM32H7RSX || \
-	           SOC_SERIES_STM32H5X
+	           SOC_SERIES_STM32H5X || \
+		   SOC_SERIES_STM32WB0
 	help
 	  Use HSI as source of MCO1
 
@@ -177,12 +179,14 @@ config CLOCK_STM32_MCO1_DIV
 	             SOC_SERIES_STM32L4X || \
 	             SOC_SERIES_STM32H7X || \
 	             SOC_SERIES_STM32H7RSX || \
-	             SOC_SERIES_STM32H5X \
+	             SOC_SERIES_STM32H5X || \
+		     SOC_SERIES_STM32WB0 \
 	           )
 	default 1
 	range 1   5 if SOC_SERIES_STM32F4X || SOC_SERIES_STM32F7X
 	range 1   15 if SOC_SERIES_STM32H7X || SOC_SERIES_STM32H7RSX || SOC_SERIES_STM32H5X
 	range 1   16 if SOC_SERIES_STM32L4X
+	range 1   32 if SOC_SERIES_STM32WB0
 	help
 	  Prescaler for MCO1 output clock
 
