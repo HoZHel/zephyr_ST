@@ -19,6 +19,7 @@
 #include <zephyr/drivers/clock_control.h>
 #include <zephyr/sys/util.h>
 #include <soc.h>
+#include <stm32_ll_bus.h>
 #include <stm32_ll_pwr.h>
 #include <stm32_ll_rcc.h>
 #include <stm32_ll_rtc.h>
@@ -112,6 +113,7 @@ struct rtc_stm32_config {
 	uint32_t async_prescaler;
 	uint32_t sync_prescaler;
 	const struct stm32_pclken *pclken;
+	const size_t pclk_len;
 #if DT_INST_NODE_HAS_PROP(0, calib_out_freq)
 	uint32_t cal_out_freq;
 #endif
@@ -354,8 +356,9 @@ static int rtc_stm32_init(const struct device *dev)
 	LL_PWR_EnableBkUpAccess();
 #endif /* RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION */
 
-	/* Enable RTC clock source */
-	if (clock_control_configure(clk, (clock_control_subsys_t)&cfg->pclken[1], NULL) != 0) {
+	/* Enable RTC clock source if required */
+	if ((cfg->pclk_len > 1)
+		&& (clock_control_configure(clk, (clock_control_subsys_t)&cfg->pclken[1], NULL) != 0)) {
 		LOG_ERR("clock configure failed\n");
 		return -EIO;
 	}
@@ -367,7 +370,31 @@ static int rtc_stm32_init(const struct device *dev)
 #ifndef CONFIG_SOC_SERIES_STM32WBAX
 	z_stm32_hsem_lock(CFG_HW_RCC_SEMID, HSEM_LOCK_DEFAULT_RETRY);
 
+#if !defined(CONFIG_SOC_SERIES_STM32WB0)
 	LL_RCC_EnableRTC();
+#else
+	/**
+	 * On STM32WB0, there is no need to "enable" the RCC after
+	 * enabling clock. However, the application must wait two
+	 * slow clock cycles before accessing the RTC IP after the
+	 * RTCEN bit in RCC registers is set. There is no register
+	 * we can poll to ensure this delay has elapsed, though...
+	 * It is also not possible to use the same trick done in IWDG
+	 * driver, because reseting the RTC also clears all data in
+	 * backup domain... as a last resort, busy wait for enough
+	 * time to be sure that RTC is definitely up.
+	 *
+	 * NOTE: the RTCEN bit is not cleared upon reset - except for
+	 * Power-On Reset. An issue caused by accesses performed too
+	 * early in the driver would only be visible on POR, or if the
+	 * RTC clock was explicitely disabled before resetting MCU.
+	 *
+	 * The worst-case slow clock frequency is LSI @ 24kHz.
+	 * In this situation, one clock cycles takes ~42µs.
+	 */
+	const uint32_t worst_slow_clock_period_us = 42;
+	k_busy_wait(2 * worst_slow_clock_period_us);
+#endif /* !CONFIG_SOC_SERIES_STM32WB0 */
 
 	z_stm32_hsem_unlock(CFG_HW_RCC_SEMID);
 #endif /* CONFIG_SOC_SERIES_STM32WBAX */
@@ -1055,11 +1082,32 @@ static const struct rtc_driver_api rtc_stm32_driver_api = {
 
 static const struct stm32_pclken rtc_clk[] = STM32_DT_INST_CLOCKS(0);
 
+#if defined(CONFIG_SOC_SERIES_STM32WB0)
+
+#if DT_SAME_NODE(DT_PHANDLE(DT_NODELABEL(rcc), slow-clock), DT_NODELABEL(clk_lsi))
+//TODO: the RTC driver does not support clocks with non-fixed frequency
+//Confirm that RTC-with-LSI is a valid use case before adding support.
+#error Using LSI as RTC clock souce is unsupported on STM32WB0
+#elif DT_SAME_NODE(DT_PHANDLE(DT_NODELABEL(rcc), slow-clock), DT_NODELABEL(clk_16mhz_div512))
+#define RTC_CLOCK_SOURCE	STM32_SRC_LSI /* pretend to be LSI to fall in 32kHz source codepath */
+#else
+#define RTC_CLOCK_SOURCE	STM32_SRC_CLKSLOWMUX /* value is irrelevant, as long as it's not STM32_SRC_LSI */
+#endif /* DT_SAME_NODE(DT_PHANDLE(DT_NODELABEL(rcc), slow-clock), DT_NODELABEL(clk_lsi)) */
+
+#else /* defined(CONFIG_SOC_SERIES_STM32WB0) */
+
+#define RTC_CLOCK_SOURCE	DT_INST_CLOCKS_CELL_BY_IDX(0, 1, bus)
+
+#endif /* defined(CONFIG_SOC_SERIES_STM32WB0) */
+
+/* Some series (e.g., STM32WB0) do not need RTC clock source in DTS */
+#if !defined(CONFIG_SOC_SERIES_STM32WB0)
 BUILD_ASSERT(DT_INST_CLOCKS_HAS_IDX(0, 1), "RTC source clock not defined in the device tree");
+#endif/* CONFIG_SOC_SERIES_STM32WB0 */
 
 static const struct rtc_stm32_config rtc_config = {
-#if DT_INST_CLOCKS_CELL_BY_IDX(0, 1, bus) == STM32_SRC_LSI
-	/* prescaler values for LSI @ 32 KHz */
+#if RTC_CLOCK_SOURCE == STM32_SRC_LSI
+	/* prescaler values for 32 KHz source (e.g., LSI) */
 	.async_prescaler = 0x7F,
 	.sync_prescaler = 0x00F9,
 #else /* DT_INST_CLOCKS_CELL_BY_IDX(0, 1, bus) == STM32_SRC_LSE */
@@ -1068,6 +1116,7 @@ static const struct rtc_stm32_config rtc_config = {
 	.sync_prescaler = 0x00FF,
 #endif
 	.pclken = rtc_clk,
+	.pclk_len = DT_INST_NUM_CLOCKS(0),
 #if DT_INST_NODE_HAS_PROP(0, calib_out_freq)
 	.cal_out_freq = _CONCAT(_CONCAT(LL_RTC_CALIB_OUTPUT_, DT_INST_PROP(0, calib_out_freq)), HZ),
 #endif
