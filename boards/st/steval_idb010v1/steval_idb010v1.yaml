@@ -1,0 +1,16 @@
+identifier: steval_idb010v1
+name: ST BlueNRG-LP Evaluation Platform
+type: mcu
+arch: arm
+toolchain:
+  - zephyr
+  - gnuarmemb
+  - xtools
+ram: 64
+flash: 256
+supported:
+  - gpio
+  - i2c
+  - spi
+  - watchdog
+vendor: st
