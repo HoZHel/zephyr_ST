@@ -15,8 +15,27 @@
 #include <string.h>
 #include <zephyr/sys/byteorder.h>
 
+#if defined(CONFIG_SOC_SERIES_STM32WB0)
+
+#define STM32_UID_SIZE_IN_WORDS	2
+
+/* Low-order bits of the UID have
+ * more entropy, use them first.
+ */
+#define STM32_UID_WORD_0 LL_GetUID_Word1()
+#define STM32_UID_WORD_1 LL_GetUID_Word0()
+
+#else
+
+#define STM32_UID_SIZE_IN_WORDS	3
+#define STM32_UID_WORD_0 LL_GetUID_Word2()
+#define STM32_UID_WORD_1 LL_GetUID_Word1()
+#define STM32_UID_WORD_2 LL_GetUID_Word0()
+
+#endif /* CONFIG_SOC_SERIES_STM32WB0 */
+
 struct stm32_uid {
-	uint32_t id[3];
+	uint32_t id[STM32_UID_SIZE_IN_WORDS];
 };
 
 ssize_t z_impl_hwinfo_get_device_id(uint8_t *buffer, size_t length)
@@ -27,9 +46,11 @@ ssize_t z_impl_hwinfo_get_device_id(uint8_t *buffer, size_t length)
 	LL_ICACHE_Disable();
 #endif /* CONFIG_SOC_SERIES_STM32H5X */
 
-	dev_id.id[0] = sys_cpu_to_be32(LL_GetUID_Word2());
-	dev_id.id[1] = sys_cpu_to_be32(LL_GetUID_Word1());
-	dev_id.id[2] = sys_cpu_to_be32(LL_GetUID_Word0());
+#define SET_ID_X(x, _) dev_id.id[x] = STM32_UID_WORD_ ##x
+
+	LISTIFY(STM32_UID_SIZE_IN_WORDS, SET_ID_X, (;));
+
+#undef SET_ID_X
 
 #if defined(CONFIG_SOC_SERIES_STM32H5X)
 	LL_ICACHE_Enable();
@@ -46,7 +67,9 @@ ssize_t z_impl_hwinfo_get_device_id(uint8_t *buffer, size_t length)
 
 #if defined(CONFIG_SOC_SERIES_STM32WBAX) || \
 	defined(CONFIG_SOC_SERIES_STM32WBX) || \
-	defined(CONFIG_SOC_SERIES_STM32WLX)
+	defined(CONFIG_SOC_SERIES_STM32WLX) || \
+	defined(CONFIG_SOC_SERIES_STM32WB0)
+
 struct stm32_eui64 {
 	uint32_t id[2];
 };
