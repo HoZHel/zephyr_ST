@@ -382,7 +382,7 @@ static int counter_stm32_get_tim_clk(const struct stm32_pclken *pclken, uint32_t
 	if (r < 0) {
 		return r;
 	}
-
+#if !defined(CONFIG_SOC_SERIES_STM32WB0)
 #if defined(CONFIG_SOC_SERIES_STM32H7X)
 	if (pclken->bus == STM32_CLOCK_BUS_APB1) {
 		apb_psc = STM32_D2PPRE1;
@@ -407,6 +407,10 @@ static int counter_stm32_get_tim_clk(const struct stm32_pclken *pclken, uint32_t
 	}
 #endif
 #endif
+#else /* CONFIG_SOC_SERIES_STM32WB0 */
+	/* No prescaler for timers on STM32WB0. */
+	apb_psc = 1;
+#endif /* CONFIG_SOC_SERIES_STM32WB0 */
 
 #if defined(RCC_DCKCFGR_TIMPRE) || defined(RCC_DCKCFGR1_TIMPRE) || \
 	defined(RCC_CFGR_TIMPRE)
