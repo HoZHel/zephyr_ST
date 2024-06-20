@@ -75,6 +75,8 @@ uint32_t table_ll_channel[] = {
 #else
 #define dmamux_channel_typedef const DMAMUX_Channel_TypeDef
 #endif
+
+#if !defined(CONFIG_SOC_SERIES_STM32WB0)
 uint32_t (*func_ll_is_active_so[])(dmamux_channel_typedef * DMAMUXx) = {
 	LISTIFY(DT_INST_PROP(0, dma_channels), IS_ACTIVE_FLAG_SOX, (,))
 };
@@ -90,6 +92,7 @@ uint32_t (*func_ll_is_active_rgo[])(dmamux_channel_typedef * DMAMUXx) = {
 void (*func_ll_clear_rgo[])(dmamux_channel_typedef * DMAMUXx) = {
 	LISTIFY(DT_INST_PROP(0, dma_generators), CLEAR_FLAG_RGOX, (,))
 };
+#endif /* !defined(CONFIG_SOC_SERIES_STM32WB0)*/
 
 typedef int (*dma_configure_fn)(const struct device *dev, uint32_t id, struct dma_config *config);
 typedef int (*dma_start_fn)(const struct device *dev, uint32_t id);
