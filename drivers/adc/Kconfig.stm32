@@ -14,7 +14,14 @@ config ADC_STM32
 	help
 	  Enable the driver implementation for the stm32xx ADC
 
-if ADC_STM32
+config ADC_STM32WB0
+	bool "STM32WB0 ADC driver"
+	default y
+	depends on DT_HAS_ST_STM32WB0_ADC_ENABLED
+	help
+	  Enable the driver implementation for the STM32WB0 ADC
+
+if ADC_STM32 || ADC_STM32WB0
 
 config ADC_STM32_DMA
 	bool "STM32 MCU ADC DMA Support"
