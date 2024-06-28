@@ -1,0 +1,5 @@
+board:
+  name: steval_idb013v1
+  vendor: st
+  socs:
+    - name: stm32wb05

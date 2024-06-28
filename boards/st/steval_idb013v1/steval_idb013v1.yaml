@@ -1,0 +1,16 @@
+identifier: steval_idb012v2
+name: ST BlueNRG-LPS Evaluation Platform
+type: mcu
+arch: arm
+toolchain:
+  - zephyr
+  - gnuarmemb
+  - xtools
+ram: 24
+flash: 192
+supported:
+  - gpio
+  - i2c
+  - spi
+  - watchdog
+vendor: st
