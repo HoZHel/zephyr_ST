@@ -60,13 +60,30 @@ choice POWER_SUPPLY_CHOICE
 	prompt "STM32 power supply configuration"
 	default POWER_SUPPLY_LDO
 	depends on SOC_SERIES_STM32H7X || SOC_SERIES_STM32H7RSX || \
-		SOC_SERIES_STM32U5X || SOC_STM32WBA55XX
+		SOC_SERIES_STM32U5X || SOC_STM32WBA55XX || \
+		SOC_SERIES_STM32WB0
 
 config POWER_SUPPLY_LDO
 	bool "LDO supply"
 
 config POWER_SUPPLY_DIRECT_SMPS
 	bool "Direct SMPS supply"
+	depends on !SOC_SERIES_STM32WB0
+
+config POWER_SUPPLY_SMPS_SUPPLIES_LDO
+	bool "SMPS supplies LDO"
+	depends on SOC_SERIES_STM32WB0
+	help
+	  SMPS in enabled, in RUN mode. Clock required for SMPS.
+	  VDDSD input is used to provide a regulated voltage to LDOs.
+
+config POWER_SUPPLY_SMPS_PRECHARGE_SUPPLIES_LDO
+	bool "SMPS supplies LDO (PRECHARGE mode)"
+	depends on SOC_SERIES_STM32WB0
+	help
+	  SMPS in PRECHARGE (BYPASS) mode. No clock required for SMPS.
+	  VDDSD input voltage is provided as-is to LDOs (no regulation).
+	  A current limitation can be programmed at SMPS output.
 
 config POWER_SUPPLY_SMPS_1V8_SUPPLIES_LDO
 	bool "SMPS 1.8V supplies LDO (no external supply)"
