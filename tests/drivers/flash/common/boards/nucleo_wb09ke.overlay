@@ -1,0 +1,14 @@
+
+&flash0 {
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		/* Reserve 4KiB at end of flash for storage_partition. */
+		storage_partition: partition@7F000 {
+			label = "storage";
+			reg = <0x0007F000 DT_SIZE_K(4)>;
+		};
+	};
+};
