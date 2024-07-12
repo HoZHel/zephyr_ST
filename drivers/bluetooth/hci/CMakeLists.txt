@@ -29,6 +29,7 @@ zephyr_library_sources_ifdef(CONFIG_BT_CYW208XX  hci_ifx_cyw208xx.c)
 
 zephyr_library_sources_ifdef(CONFIG_BT_STM32_IPM   ipm_stm32wb.c)
 zephyr_library_sources_ifdef(CONFIG_BT_STM32WBA    hci_stm32wba.c)
+zephyr_library_sources_ifdef(CONFIG_BT_STM32WB0    hci_stm32wb0.c)
 zephyr_library_sources_ifdef(CONFIG_BT_USERCHAN    userchan.c)
 zephyr_library_sources_ifdef(CONFIG_BT_SILABS_HCI  slz_hci.c)
 zephyr_library_sources_ifdef(CONFIG_BT_PSOC6_BLESS hci_ifx_psoc6_bless.c)
