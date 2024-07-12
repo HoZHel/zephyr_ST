@@ -74,6 +74,19 @@ config BT_STM32WBA
 	help
 	  ST STM32WBA HCI Bluetooth interface
 
+config BT_STM32WB0
+	bool "STM32WB0 HCI driver"
+	default y
+	depends on DT_HAS_ST_HCI_STM32WB0_ENABLED
+	select HAS_STM32LIB
+	select USE_STM32_HAL_PKA
+	select USE_STM32_HAL_CORTEX
+	select USE_STM32_HAL_GPIO
+	select USE_STM32_HAL_RADIO
+	select USE_STM32_HAL_RADIO_TIMER
+	help
+	  ST STM32WB0 HCI Bluetooth interface
+
 config BT_SILABS_HCI
 	bool "Silicon Labs Bluetooth interface"
 	default y
@@ -238,7 +251,7 @@ config BT_HCI_SETUP
 
 config BT_DRV_TX_STACK_SIZE
 	int
-	default 256
+	default 1024
 	help
 	  Stack size for the HCI driver's TX thread.
 
@@ -247,7 +260,7 @@ config BT_DRV_RX_STACK_SIZE
 	default 640 if (BT_SPI || BT_AMBIQ_HCI)
 	default BT_RX_STACK_SIZE if (BT_H4 || BT_HCI_RAW_H4)
 	default BT_STM32_IPM_RX_STACK_SIZE if BT_STM32_IPM
-	default 256
+	default 512
 	help
 	  Stack size for the HCI driver's RX thread.
 
