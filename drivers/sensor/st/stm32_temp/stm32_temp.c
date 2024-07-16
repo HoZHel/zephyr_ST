@@ -17,6 +17,7 @@
 #endif /* CONFIG_SOC_SERIES_STM32H5X */
 
 LOG_MODULE_REGISTER(stm32_temp, CONFIG_SENSOR_LOG_LEVEL);
+
 #define CAL_RES 12
 #if DT_HAS_COMPAT_STATUS_OKAY(st_stm32_temp)
 #define DT_DRV_COMPAT st_stm32_temp
@@ -46,10 +47,10 @@ struct stm32_temp_data {
 
 struct stm32_temp_config {
 #if HAS_CALIBRATION
-	uint16_t *cal1_addr;
+	const void *cal1_addr;
 	int cal1_temp;
 #if HAS_DUAL_CALIBRATION
-	uint16_t *cal2_addr;
+	const void *cal2_addr;
 	int cal2_temp;
 #else
 	int avgslope;
@@ -63,12 +64,76 @@ struct stm32_temp_config {
 	bool is_ntc;
 };
 
+static inline void enable_adc_ts_channel(ADC_TypeDef *adc)
+{
+#if defined(CONFIG_SOC_SERIES_STM32WB0)
+	/* Temperature sensor channel always enabled on WB0x.
+	 * Silence compiler warning since `adc` is unused.
+	 */
+	ARG_UNUSED(adc);
+#else
+	uint32_t path = LL_ADC_GetCommonPathInternalCh(__LL_ADC_COMMON_INSTANCE(data->adc_base));
+
+	LL_ADC_SetCommonPathInternalCh(__LL_ADC_COMMON_INSTANCE(data->adc_base),
+				       LL_ADC_PATH_INTERNAL_TEMPSENSOR | path);
+
+	k_usleep(LL_ADC_DELAY_TEMPSENSOR_STAB_US);
+#endif /* CONFIG_SOC_SERIES_STM32WB0 */
+}
+
+static inline void disable_adc_ts_channel(ADC_TypeDef *adc)
+{
+#if defined(CONFIG_SOC_SERIES_STM32WB0)
+	/* Temperature sensor channel always enabled on WB0x.
+	 * Silence compiler warning since `adc` is unused.
+	 */
+	ARG_UNUSED(adc);
+#else
+	uint32_t path = LL_ADC_GetCommonPathInternalCh(__LL_ADC_COMMON_INSTANCE(data->adc_base));
+
+	LL_ADC_SetCommonPathInternalCh(__LL_ADC_COMMON_INSTANCE(data->adc_base),
+				       path &= ~LL_ADC_PATH_INTERNAL_TEMPSENSOR);
+#endif /* CONFIG_SOC_SERIES_STM32WB0 */
+
+}
+
+#if defined(HAS_CALIBRATION)
+static inline uint32_t read_mfg_flash_data(const void *addr)
+{
+#if defined(CONFIG_SOC_SERIES_STM32WB0)
+	return sys_read32((mem_addr_t)addr);
+#else
+	return (uint32_t)sys_read16((mem_addr_t)addr);
+#endif /* CONFIG_SOC_SERIES_STM32WB0 */
+}
+
+static inline void read_calibration_data(const struct stm32_temp_config *cfg,
+					uint32_t *cal1, uint32_t *cal2)
+{
+#if defined(CONFIG_SOC_SERIES_STM32H5X)
+	/* Manufacturing flash accesses must be non-cacheable on STM32H5x */
+	LL_ICACHE_Disable();
+#endif /* CONFIG_SOC_SERIES_STM32H5X */
+
+	*cal1 = read_mfg_flash_data(cfg->cal1_addr);
+#if HAS_DUAL_CALIBRATION
+	*cal2 = read_mfg_flash_data(cfg->cal2_addr);
+#else /* HAS_SINGLE_CALIBRATION */
+	ARG_UNUSED(cal2);
+#endif
+
+#if defined(CONFIG_SOC_SERIES_STM32H5X)
+	/* Enable back ICACHE (unconditonally, as in soc.c) */
+	LL_ICACHE_Enable();
+#endif /* CONFIG_SOC_SERIES_STM32H5X */
+}
+#endif /* HAS_CALIBRATION */
+
 static int stm32_temp_sample_fetch(const struct device *dev, enum sensor_channel chan)
 {
 	struct stm32_temp_data *data = dev->data;
 	struct adc_sequence *sp = &data->adc_seq;
 	int rc;
-	uint32_t path;
 
 	if (chan != SENSOR_CHAN_ALL && chan != SENSOR_CHAN_DIE_TEMP) {
 		return -ENOTSUP;
@@ -83,20 +148,14 @@ static int stm32_temp_sample_fetch(const struct device *dev, enum sensor_channel
 		goto unlock;
 	}
 
-	path = LL_ADC_GetCommonPathInternalCh(__LL_ADC_COMMON_INSTANCE(data->adc_base));
-	LL_ADC_SetCommonPathInternalCh(__LL_ADC_COMMON_INSTANCE(data->adc_base),
-				       LL_ADC_PATH_INTERNAL_TEMPSENSOR | path);
-
-	k_usleep(LL_ADC_DELAY_TEMPSENSOR_STAB_US);
+	enable_adc_ts_channel(data->adc_base);
 
 	rc = adc_read(data->adc, sp);
 	if (rc == 0) {
 		data->raw = data->sample_buffer;
 	}
 
-	path = LL_ADC_GetCommonPathInternalCh(__LL_ADC_COMMON_INSTANCE(data->adc_base));
-	LL_ADC_SetCommonPathInternalCh(__LL_ADC_COMMON_INSTANCE(data->adc_base),
-				       path &= ~LL_ADC_PATH_INTERNAL_TEMPSENSOR);
+	disable_adc_ts_channel(data->adc_base);
 
 unlock:
 	pm_device_runtime_put(data->adc);
@@ -117,29 +176,30 @@ static int stm32_temp_channel_get(const struct device *dev, enum sensor_channel 
 	}
 
 #if HAS_CALIBRATION
+	uint32_t vref, cal1, cal2;
 
-#if defined(CONFIG_SOC_SERIES_STM32H5X)
-	LL_ICACHE_Disable();
-#endif /* CONFIG_SOC_SERIES_STM32H5X */
+	vref = adc_ref_internal(data->adc);
+	read_calibration_data(cfg, &cal1, &cal2);
 
-	temp = ((float)data->raw * adc_ref_internal(data->adc)) / cfg->cal_vrefanalog;
-	temp -= (*cfg->cal1_addr >> cfg->ts_cal_shift);
+	if (vref != cfg->cal_vrefanalog) {
+		temp = ((float)vref / cfg->cal_vrefanalog) * data->raw;
+	} else {
+		temp = (float)data->raw;
+	}
+
+	temp -= (cal1 >> cfg->ts_cal_shift);
 #if HAS_SINGLE_CALIBRATION
+	ARG_UNUSED(cal2);
 	if (cfg->is_ntc) {
 		temp = -temp;
 	}
 	temp /= (cfg->avgslope * 4096) / (cfg->cal_vrefanalog * 1000);
-#else
+#else /* HAS_DUAL_CALIBRATION */
 	temp *= (cfg->cal2_temp - cfg->cal1_temp);
-	temp /= ((*cfg->cal2_addr - *cfg->cal1_addr) >> cfg->ts_cal_shift);
+	temp /= ((cal2 - cal1) >> cfg->ts_cal_shift);
 #endif
 	temp += cfg->cal1_temp;
-
-#if defined(CONFIG_SOC_SERIES_STM32H5X)
-	LL_ICACHE_Enable();
-#endif /* CONFIG_SOC_SERIES_STM32H5X */
-
-#else
+#else /* !HAS_CALIBRATION */
 	/* Sensor value in millivolts */
 	int32_t mv = data->raw * adc_ref_internal(data->adc) / 0x0FFF;
 
@@ -168,7 +228,7 @@ static int stm32_temp_init(const struct device *dev)
 	k_mutex_init(&data->mutex);
 
 	if (!device_is_ready(data->adc)) {
-		LOG_ERR("Device %s is not ready", data->adc->name);
+		LOG_ERR("ADC device %s is not ready", data->adc->name);
 		return -ENODEV;
 	}
 
@@ -176,7 +236,7 @@ static int stm32_temp_init(const struct device *dev)
 		.channels = BIT(data->adc_cfg.channel_id),
 		.buffer = &data->sample_buffer,
 		.buffer_size = sizeof(data->sample_buffer),
-		.resolution = 12U,
+		.resolution = CAL_RES,
 	};
 
 	return 0;
@@ -187,8 +247,14 @@ static struct stm32_temp_data stm32_temp_dev_data = {
 	.adc_base = (ADC_TypeDef *)DT_REG_ADDR(DT_INST_IO_CHANNELS_CTLR(0)),
 	.adc_cfg = {
 		.gain = ADC_GAIN_1,
+#if defined(CONFIG_SOC_SERIES_STM32WB0)
+		.reference = ADC_REF_VDD_1_3,
+		/* TODO: can ADC_ACQ_TIME_DEFAULT be used for all series? */
+		.acquisition_time = ADC_ACQ_TIME_DEFAULT,
+#else
 		.reference = ADC_REF_INTERNAL,
 		.acquisition_time = ADC_ACQ_TIME_MAX,
+#endif
 		.channel_id = DT_INST_IO_CHANNELS_INPUT(0),
 		.differential = 0
 	},
@@ -196,10 +262,10 @@ static struct stm32_temp_data stm32_temp_dev_data = {
 
 static const struct stm32_temp_config stm32_temp_dev_config = {
 #if HAS_CALIBRATION
-	.cal1_addr = (uint16_t *)DT_INST_PROP(0, ts_cal1_addr),
+	.cal1_addr = (const void *)DT_INST_PROP(0, ts_cal1_addr),
 	.cal1_temp = DT_INST_PROP(0, ts_cal1_temp),
 #if HAS_DUAL_CALIBRATION
-	.cal2_addr = (uint16_t *)DT_INST_PROP(0, ts_cal2_addr),
+	.cal2_addr = (const void *)DT_INST_PROP(0, ts_cal2_addr),
 	.cal2_temp = DT_INST_PROP(0, ts_cal2_temp),
 #else
 	.avgslope = DT_INST_PROP(0, avgslope),
