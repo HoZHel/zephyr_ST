@@ -787,8 +787,9 @@ static int initiate_read_operation(const struct device *dev,
 }
 
 #if !defined(CONFIG_ADC_STM32_DMA)
-static void adc_stm32wb0_isr(const struct device *dev)
+ISR_DIRECT_DECLARE(adc_stm32wb0_isr)
 {
+	const struct device *dev = DEVICE_DT_GET(ADC_NODE);
 	const struct adc_stm32wb0_config *config = dev->config;
 	struct adc_stm32wb0_data *data = dev->data;
 	ADC_TypeDef *adc = config->reg;
@@ -802,13 +803,23 @@ static void adc_stm32wb0_isr(const struct device *dev)
 		*data->next_sample_ptr++ = LL_ADC_DSGetOutputData(adc);
 	}
 
-	/* ADC sequence finished */
-	if (LL_ADC_IsActiveFlag_EOS(adc)) {
-		/* Clear pending interrupt flag */
-		LL_ADC_ClearFlag_EOS(adc);
+	ISR_DIRECT_PM();
 
-		handle_end_of_sequence(adc, data);
+	if (!LL_ADC_IsActiveFlag_EOS(adc)) {
+		/* ADC sequence not finished yet - z_swap() not required */
+		return 0;
 	}
+
+	/* Clear pending interrupt flag */
+	LL_ADC_ClearFlag_EOS(adc);
+
+	/* Execute end-of-sequence logic */
+	handle_end_of_sequence(adc, data);
+
+	/* ADC sequence finishing may wake up threads.
+	 * Make sure we check if z_swap() is required.
+	 */
+	return 1;
 }
 #else /* CONFIG_ADC_STM32_DMA */
 static void adc_stm32wb0_dma_callback(const struct device *dma, void *user_data,
@@ -1069,9 +1080,11 @@ int adc_stm32wb0_init(const struct device *dev)
 	LL_ADC_SetOverrunDS(adc, LL_ADC_NEW_DATA_IS_KEPT);
 
 #if !defined(CONFIG_ADC_STM32_DMA)
-	/* Attach ISR and enable ADC interrupt in NVIC */
-	IRQ_CONNECT(DT_IRQN(ADC_NODE), DT_IRQ(ADC_NODE, priority),
-		adc_stm32wb0_isr, DEVICE_DT_GET(ADC_NODE), 0);
+	/* Attach ISR and enable ADC interrupt in NVIC.
+	 * A direct ISR is used to prevent overflows due to CPU latency.
+	 */
+	IRQ_DIRECT_CONNECT(DT_IRQN(ADC_NODE), DT_IRQ(ADC_NODE, priority),
+		adc_stm32wb0_isr, 0);
 	irq_enable(DT_IRQN(ADC_NODE));
 
 	/* Enable ADC interrupt after each sampling.
