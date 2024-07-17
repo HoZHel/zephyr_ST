@@ -487,7 +487,7 @@ static void adc_enter_idle_mode(ADC_TypeDef *adc, const struct stm32_pclken *ana
 
 #if defined(STM32WB0_SMPS_ENABLED)
 	/* Disable SMPS synchronization */
-	LL_ADC_SMPSSyncEnable(adc);
+	LL_ADC_SMPSSyncDisable(adc);
 #endif /* STM32WB0_SMPS_ENABLED */
 
 
@@ -1068,7 +1068,9 @@ int adc_stm32wb0_init(const struct device *dev)
 #if defined(ADC_SUPPORT_AUDIO_FEATURES)
 	/* Configure ADC for analog sampling */
 	LL_ADC_SetADCMode(adc, LL_ADC_OP_MODE_ADC);
+#endif
 
+#if defined(PWR_CR2_ENTS)
 	/* Enable on-die temperature sensor */
 	LL_PWR_EnableTempSens();
 #endif
