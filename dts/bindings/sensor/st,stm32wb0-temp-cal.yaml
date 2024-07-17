@@ -1,0 +1,20 @@
+# Copyright (c) 2024 STMicroelectronics
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+    STM32 family TEMP node for production calibrated sensors like STM32WB0,
+    which have a sensor value and a chuck temperature.
+
+compatible: "st,stm32wb0-temp-cal"
+
+include:
+  - name: st,stm32-temp-cal-common.yaml
+    property-blocklist:
+      - ts-cal1-temp
+
+properties:
+  ts-tck-addr:
+    type: int
+    required: true
+    description: |
+      Address of chuck temperature ("TCK") parameter
