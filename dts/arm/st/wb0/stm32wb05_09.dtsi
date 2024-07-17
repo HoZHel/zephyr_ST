@@ -74,5 +74,15 @@
 				status = "disabled";
 			};
 		};
+
+		die_temp: dietemp {
+			compatible = "st,stm32wb0-temp-cal";
+			io-channels = <&adc1 13>;
+			ts-tck-addr = <0x10001E5C>;
+			ts-cal1-addr = <0x10001E60>;
+			ts-cal-resolution = <12>;
+			ts-cal-vrefanalog= <3600>;
+			status = "disabled";
+		};
 	};
 };
