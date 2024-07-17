@@ -19,6 +19,8 @@
 LOG_MODULE_REGISTER(stm32_temp, CONFIG_SENSOR_LOG_LEVEL);
 
 #define CAL_RES 12
+#define MAX_CALIB_POINTS 2
+
 #if DT_HAS_COMPAT_STATUS_OKAY(st_stm32_temp)
 #define DT_DRV_COMPAT st_stm32_temp
 #elif DT_HAS_COMPAT_STATUS_OKAY(st_stm32_temp_cal)
@@ -27,6 +29,15 @@ LOG_MODULE_REGISTER(stm32_temp, CONFIG_SENSOR_LOG_LEVEL);
 #elif DT_HAS_COMPAT_STATUS_OKAY(st_stm32c0_temp_cal)
 #define DT_DRV_COMPAT st_stm32c0_temp_cal
 #define HAS_SINGLE_CALIBRATION 1
+#elif DT_HAS_COMPAT_STATUS_OKAY(st_stm32wb0_temp_cal)
+/* This matches only the STM32WB05 and STM32WB09 MCUs.
+ * They have 2 calibration points as well, but the formula
+ * to calculate temperature in Celcius is different from
+ * STM32WB06/STM32WB07.
+ */
+#define DT_DRV_COMPAT st_stm32wb0_temp_cal
+#define HAS_STM32WB0_TEMP_CAL 1
+#define HAS_DUAL_CALIBRATION 1
 #else
 #error "No compatible devicetree node found"
 #endif
@@ -49,11 +60,11 @@ struct stm32_temp_config {
 #if HAS_CALIBRATION
 	const void *cal1_addr;
 	int cal1_temp;
-#if HAS_DUAL_CALIBRATION
+#if defined(HAS_SINGLE_CALIBRATION)
+	int avgslope;
+#elif defined(HAS_DUAL_CALIBRATION)
 	const void *cal2_addr;
 	int cal2_temp;
-#else
-	int avgslope;
 #endif
 	int cal_vrefanalog;
 	int ts_cal_shift;
@@ -107,19 +118,27 @@ static inline uint32_t read_mfg_flash_data(const void *addr)
 #endif /* CONFIG_SOC_SERIES_STM32WB0 */
 }
 
+/**
+ * @returns the following information depending on calibration type:
+ *   HAS_SINGLE_CALIBRATION: calib_data[0] = TS_CAL
+ *
+ *   HAS_STM32WB0_TEMP_CAL:  calib_data[0] = C30
+ *                           calib_data[1] = TCK
+ *
+ *   HAS_DUAL_CALIBRATION:   calib_data[0] = TS_CAL1
+ *                           calib_data[1] = TS_CAL2
+ */
 static inline void read_calibration_data(const struct stm32_temp_config *cfg,
-					uint32_t *cal1, uint32_t *cal2)
+					uint32_t calib_data[MAX_CALIB_POINTS])
 {
 #if defined(CONFIG_SOC_SERIES_STM32H5X)
 	/* Manufacturing flash accesses must be non-cacheable on STM32H5x */
 	LL_ICACHE_Disable();
 #endif /* CONFIG_SOC_SERIES_STM32H5X */
 
-	*cal1 = read_mfg_flash_data(cfg->cal1_addr);
+	calib_data[0] = read_mfg_flash_data(cfg->cal1_addr) >> cfg->ts_cal_shift;
 #if HAS_DUAL_CALIBRATION
-	*cal2 = read_mfg_flash_data(cfg->cal2_addr);
-#else /* HAS_SINGLE_CALIBRATION */
-	ARG_UNUSED(cal2);
+	calib_data[1] = read_mfg_flash_data(cfg->cal2_addr) >> cfg->ts_cal_shift;
 #endif
 
 #if defined(CONFIG_SOC_SERIES_STM32H5X)
@@ -128,6 +147,68 @@ static inline void read_calibration_data(const struct stm32_temp_config *cfg,
 #endif /* CONFIG_SOC_SERIES_STM32H5X */
 }
 #endif /* HAS_CALIBRATION */
+
+static float calculate_temperature_from_sample(const struct device *dev)
+{
+	struct stm32_temp_data *data = dev->data;
+	const struct stm32_temp_config *cfg = dev->config;
+	float temp;
+
+#if defined(HAS_CALIBRATION)
+	/* calib_data must be zero-initialized, as read_calibration_data
+	 * may write only to the [0]th element (if HAS_SINGLE_CALIBRATION)
+	 */
+	const __maybe_unused uint32_t vref = adc_ref_internal(data->adc);
+	uint32_t calib_data[MAX_CALIB_POINTS] = { 0 };
+
+	read_calibration_data(cfg, calib_data);
+
+#if !defined(HAS_STM32WB0_TEMP_CAL)
+	/* Convert raw value to voltage */
+	temp = ((float)vref / cfg->cal_vrefanalog) * data->raw;
+
+	/**
+	 * There are two possible formulas depending on SINGLE or DUAL:
+	 *  - for SINGLE: Tj = (Vmes / Avg_Slope) + TS_CAL1_TEMP
+	 *  - for DUAL: Tj = (k * (Vmes - TS_CAL1)) + TS_CAL1_TEMP
+	 *     - k = (TS_CAL2_TEMP - TS_CAL1_TEMP) / (TS_CAL2 - TS_CAL1)
+	 * where Vmes is, depending on the MCU, one of:
+	 *     - (Vsense - TS_CAL1)
+	 *     - (TS_CAL1 - Vsense)
+	 */
+#	if DT_INST_PROP_OR(0, ntc, 0)
+	temp = (calib_data[0] - temp);
+#	else
+	temp = (temp - calib_data[0]);
+#	endif
+
+#	if defined(HAS_SINGLE_CALIBRATION)
+	temp /= (cfg->avgslope * 4096) / (cfg->cal_vrefanalog * 1000);
+#	else /* HAS_DUAL_CALIBRATION */
+	temp *= (cfg->cal2_temp - cfg->cal1_temp);
+	temp /= ((cal2 - cal1) >> cfg->ts_cal_shift);
+#	endif
+
+	temp += cfg->cal1_temp;
+#else
+	/* For STM32WB0 temperature sensor, Tj = ((Cmeas - C30 + TCK) / 10) */
+	temp = ((float)data->raw - calib_data[0] + calib_data[1]) / 10.0f;
+#endif /* HAS_STM32WB0_TEMP_CAL */
+
+#else /* !HAS_CALIBRATION */
+	/* Sensor value in millivolts */
+	int32_t mv = data->raw * adc_ref_internal(data->adc) / 0x0FFF;
+
+	if (cfg->is_ntc) {
+		temp = (float)(cfg->v25_mv - mv);
+	} else {
+		temp = (float)(mv - cfg->v25_mv);
+	}
+	temp = (temp / cfg->avgslope) * 10;
+	temp += 25;
+#endif
+	return temp;
+}
 
 static int stm32_temp_sample_fetch(const struct device *dev, enum sensor_channel chan)
 {
@@ -167,50 +248,11 @@ unlock:
 static int stm32_temp_channel_get(const struct device *dev, enum sensor_channel chan,
 				  struct sensor_value *val)
 {
-	struct stm32_temp_data *data = dev->data;
-	const struct stm32_temp_config *cfg = dev->config;
-	float temp;
-
 	if (chan != SENSOR_CHAN_DIE_TEMP) {
 		return -ENOTSUP;
 	}
 
-#if HAS_CALIBRATION
-	uint32_t vref, cal1, cal2;
-
-	vref = adc_ref_internal(data->adc);
-	read_calibration_data(cfg, &cal1, &cal2);
-
-	if (vref != cfg->cal_vrefanalog) {
-		temp = ((float)vref / cfg->cal_vrefanalog) * data->raw;
-	} else {
-		temp = (float)data->raw;
-	}
-
-	temp -= (cal1 >> cfg->ts_cal_shift);
-#if HAS_SINGLE_CALIBRATION
-	ARG_UNUSED(cal2);
-	if (cfg->is_ntc) {
-		temp = -temp;
-	}
-	temp /= (cfg->avgslope * 4096) / (cfg->cal_vrefanalog * 1000);
-#else /* HAS_DUAL_CALIBRATION */
-	temp *= (cfg->cal2_temp - cfg->cal1_temp);
-	temp /= ((cal2 - cal1) >> cfg->ts_cal_shift);
-#endif
-	temp += cfg->cal1_temp;
-#else /* !HAS_CALIBRATION */
-	/* Sensor value in millivolts */
-	int32_t mv = data->raw * adc_ref_internal(data->adc) / 0x0FFF;
-
-	if (cfg->is_ntc) {
-		temp = (float)(cfg->v25_mv - mv);
-	} else {
-		temp = (float)(mv - cfg->v25_mv);
-	}
-	temp = (temp / cfg->avgslope) * 10;
-	temp += 25;
-#endif
+	const float temp = calculate_temperature_from_sample(dev);
 
 	return sensor_value_from_float(val, temp);
 }
@@ -219,6 +261,35 @@ static const struct sensor_driver_api stm32_temp_driver_api = {
 	.sample_fetch = stm32_temp_sample_fetch,
 	.channel_get = stm32_temp_channel_get,
 };
+
+#if defined(HAS_STM32WB0_TEMP_CAL)
+/**
+ * Workaround for errata in STM32WB05/09 ADC.
+ * The first temperature sensor reading after powering
+ * on the ADC is incorrect (usually ~0x300 too low).
+ *
+ * Ensure we get proper data by always sampling twice.
+ */
+enum adc_action adc_seq_cb(const struct device *dev,
+			const struct adc_sequence *sequence,
+			uint16_t sampling_index)
+{
+	static bool first = true;
+	bool repeat = first;
+
+	first = !first;
+
+	if (repeat) {
+		return ADC_ACTION_REPEAT;
+	} else {
+		return ADC_ACTION_FINISH;
+	}
+}
+
+static struct adc_sequence_options adc_seq_opts = {
+	.callback = adc_seq_cb
+};
+#endif
 
 static int stm32_temp_init(const struct device *dev)
 {
@@ -237,6 +308,9 @@ static int stm32_temp_init(const struct device *dev)
 		.buffer = &data->sample_buffer,
 		.buffer_size = sizeof(data->sample_buffer),
 		.resolution = CAL_RES,
+#if defined(HAS_STM32WB0_TEMP_CAL)
+		.options = &adc_seq_opts,
+#endif
 	};
 
 	return 0;
@@ -263,10 +337,17 @@ static struct stm32_temp_data stm32_temp_dev_data = {
 static const struct stm32_temp_config stm32_temp_dev_config = {
 #if HAS_CALIBRATION
 	.cal1_addr = (const void *)DT_INST_PROP(0, ts_cal1_addr),
+#if defined(HAS_SINGLE_CALIBRATION)
 	.cal1_temp = DT_INST_PROP(0, ts_cal1_temp),
-#if HAS_DUAL_CALIBRATION
+	.avgslope = DT_INST_PROP(0, avgslope),
+#elif defined(HAS_DUAL_CALIBRATION)
+#	if !defined(HAS_STM32WB0_TEMP_CAL)
 	.cal2_addr = (const void *)DT_INST_PROP(0, ts_cal2_addr),
 	.cal2_temp = DT_INST_PROP(0, ts_cal2_temp),
+#else
+	.cal2_addr = (const void *)DT_INST_PROP(0, ts_tck_addr),
+	.cal2_temp = 0, /* doesn't matter */
+#endif /* HAS_STM32WB0_TEMP_CAL */
 #else
 	.avgslope = DT_INST_PROP(0, avgslope),
 #endif
