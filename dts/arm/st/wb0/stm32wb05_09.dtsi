@@ -8,8 +8,9 @@
 
 /* Common Device Tree fragment for STM32WB05 and STM32WB09
  *
- * STM32WB05 and STM32WB09 are identical except for RAM and flash size,
- * which are specified in separate fragments that include this one.
+ * STM32WB05 and STM32WB09 are mostly identical. The differences are
+ * the amount of RAM and the RNG peripheral; both of these are defined
+ * in the model-specific DTS fragments.
  */
 / {
 	soc {
