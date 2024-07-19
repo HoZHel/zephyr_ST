@@ -26,7 +26,7 @@
 
 / {
 	chosen {
-/*		zephyr,entropy = &rng; */
+		zephyr,entropy = &rng;
 		zephyr,flash-controller = &flash;
 	};
 
@@ -316,6 +316,19 @@
 			dma-channels = <8>;
 			dma-generators = <1>;
 			dma-requests= <25>;
+			status = "disabled";
+		};
+
+
+		/* Properties common to the RNG peripheral of all MCUs in
+		 * the STM32WB0 series. The STM32WB09 has a different TRNG
+		 * compared to the rest of the series, which requires
+		 * a different compatible; this is handled in `stm32wb09.dtsi`.
+		 */
+		rng: rng@48600000 {
+			compatible = "st,stm32-rng";
+			reg = <0x48600000 DT_SIZE_K(4)>;
+			clocks = <&rcc STM32_CLOCK(AHB0, 18)>;
 			status = "disabled";
 		};
 	};

@@ -5,12 +5,11 @@
  */
 
 #include <st/wb0/stm32wb0.dtsi>
-#include <st/wb0/wb05_06_07_rng.dtsi>
 
 /* Common Device Tree fragment for STM32WB06 and STM32WB07
  *
  * STM32WB06 and STM32WB07 are mostly identical. The only difference
- * is RAM size, which is defined in the model-specific DTS fragments.
+ * is RAM size, which is defined in the SoC-specific DTS fragments.
  */
 / {
 	soc {
@@ -44,7 +43,6 @@
 			#size-cells = <0>;
 			reg = <0x41001000 DT_SIZE_K(1)>;
 			clocks = <&rcc STM32_CLOCK(APB1, 23)>;
-		//	resets = <&rctl STM32_RESET(APB1, 23)>;
 			interrupts = <4 0>;
 			interrupt-names = "combined";
 			status = "disabled";
@@ -56,7 +54,6 @@
 			#size-cells = <0>;
 			reg = <0x41002000 DT_SIZE_K(1)>;
 			clocks = <&rcc STM32_CLOCK(APB1, 0)>;
-		//	resets = <&rctl STM32_RESET(APB1, 0)>;
 			interrupts = <5 0>;
 			status = "disabled";
 		};
@@ -67,36 +64,24 @@
 			#size-cells = <0>;
 			reg = <0x41003000 DT_SIZE_K(1)>;
 			clocks = <&rcc STM32_CLOCK(APB1, 12)>;
-		//	resets = <&rctl STM32_RESET(APB1, 12)>;
 			interrupts = <6 0>;
 			status = "disabled";
 
 			//TODO: create the I2S node corresponding to spi2
 		};
+	};
 
-		die_temp: dietemp {
-			compatible = "st,stm32-temp-cal";
-			io-channels = <&adc1 13>;
-			ts-cal1-addr = <0x10001E60>;
-			ts-cal2-addr = <0x10001E68>;
-			ts-cal1-temp = <30>;
-			ts-cal2-temp = <85>;
-			/* dietemp driver is oblivious to WB0x ADC specificities.
-			 * This value ensures the driver returns correct results,
-			 * despite Vinput range being 1.2V for temperature sensor.
-			 */
-			ts-cal-vrefanalog = <3600>;
-			status = "disabled";
-		};
-
-/*
-		rng: rng@48600000 {
-			compatible = "st,stm32-rng";
-			reg = <0x48600000 DT_SIZE_K(4)>;
-			clocks = <&rcc STM32_CLOCK(AHB0, 18)>;
-		//	resets = <&rctl STM32_RESET(AHB0, 18)>;
-			status = "disabled";
-		};
-*/
+	die_temp: dietemp {
+		compatible = "st,stm32-temp-cal";
+		io-channels = <&adc1 13>;
+		ts-cal1-addr = <0x10001E60>;
+		ts-cal2-addr = <0x10001E68>;
+		ts-cal1-temp = <30>;
+		ts-cal2-temp = <85>;
+		/* dietemp driver is oblivious to WB0x ADC specificities.
+		 * This value must be equal to ADC driver `ref_internal`.
+		 */
+		ts-cal-vrefanalog = <3600>;
+		status = "disabled";
 	};
 };

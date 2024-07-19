@@ -16,14 +16,19 @@
 			};
 		};
 
-		/* STM32WB09-specific "TRNG v1.68" RNG IP */
 		rng: rng@48600000 {
+			/* Unlike all other MCUs in the STM32WB0 series,
+			 * the STM32WB09 uses a different and unusual TRNG
+			 * peripheral, which requires a separate driver.
+			 * It is mapped at the same address and controlled
+			 * by the same RCC register field, though. Change
+			 * only the `compatible` to make everything work.
+			 */
+			/delete-property/ compatible;
 			compatible = "st,stm32wb09-rng";
-			reg = <0x48600000 DT_SIZE_K(1)>;
-			clocks = <&rcc STM32_CLOCK(AHB0, 18)>;
-			//resets = <&rctl STM32_RESET(AHB0, 18)>;
+
+			/* This TRNG has an interrupt line, too. */
 			interrupts = <28 0>;
-			status = "disabled";
 		};
 	};
 

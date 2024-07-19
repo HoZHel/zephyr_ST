@@ -5,7 +5,6 @@
  */
 
 #include <st/wb0/stm32wb05_09.dtsi>
-#include <st/wb0/wb05_06_07_rng.dtsi>
 
 / {
 	soc {
