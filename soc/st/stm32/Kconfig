@@ -56,9 +56,13 @@ config STM32_WKUP_PINS
 	help
 	  Enable support for STM32 PWR wake-up pins.
 
+# Select SMPS by default on WB0 because keeping SMPS enabled on
+# NOSMPS hardware configuration is fine but turning off on SMPS
+# hardware configuration bricks the board
 choice POWER_SUPPLY_CHOICE
 	prompt "STM32 power supply configuration"
-	default POWER_SUPPLY_LDO
+	default POWER_SUPPLY_LDO if !SOC_SERIES_STM32WB0
+	default POWER_SUPPLY_SMPS_SUPPLIES_LDO if SOC_SERIES_STM32WB0
 	depends on SOC_SERIES_STM32H7X || SOC_SERIES_STM32H7RSX || \
 		SOC_SERIES_STM32U5X || SOC_STM32WBA55XX || \
 		SOC_SERIES_STM32WB0
