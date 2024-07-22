@@ -926,10 +926,12 @@ int adc_stm32wb0_channel_setup(const struct device *dev,
 	const uint8_t vin_range =  vinput_range_from_adc_ref(channel_cfg->reference);
 	const uint32_t channel_id = channel_cfg->channel_id;
 	struct adc_stm32wb0_data *data = dev->data;
+	int res;
 
 	/* Forbid reconfiguration while operation in progress */
-	if (!k_sem_count_get(&data->ctx.lock)) {
-		return -EBUSY;
+	res = k_sem_take(&data->ctx.lock, K_NO_WAIT);
+	if (res < 0) {
+		return res;
 	}
 
 	/* Validate channel configuration parameters */
@@ -973,6 +975,9 @@ int adc_stm32wb0_channel_setup(const struct device *dev,
 	 * is the ADC channel reference (= Vinput range).
 	 */
 	data->channel_config[channel_id].vinput_range = vin_range;
+
+	/* Unlock the instance after updating configuration */
+	k_sem_give(&data->ctx.lock);
 
 	return 0;
 }
