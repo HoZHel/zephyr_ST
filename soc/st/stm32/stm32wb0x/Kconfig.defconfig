@@ -10,6 +10,7 @@ if SOC_SERIES_STM32WB0
 config BT_MAX_CONN
 	range 1 128
 
-rsource "Kconfig.defconfig.stm32wb0*"
+config NUM_IRQS
+	default 32
 
 endif # SOC_SERIES_STM32WB0
