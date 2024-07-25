@@ -39,7 +39,7 @@ LOG_MODULE_REGISTER(flash_stm32wb0x, CONFIG_FLASH_LOG_LEVEL);
 #	define PAGES_IN_FLASH 96
 #endif
 
-#define FLASH_PTR(off)  ((void *)(DT_REG_ADDR(DT_INST(0, st_stm32_nv_flash)) + (off)))
+#define FLASH_PTR(off)  ((void *)(DT_REG_ADDR(DT_INST(0, st_stm32_nv_flash)) + ((uint32_t)off)))
 
 #define WRITE_BLOCK_SIZE \
 	DT_PROP(DT_INST(0, soc_nv_flash), write_block_size)
@@ -127,12 +127,19 @@ static bool is_valid_flash_range(const struct device *dev,
 				off_t offset, uint32_t len)
 {
 	const struct flash_wb0x_data *data = dev->data;
-	const uint32_t max_flash_offset = data->flash_size - 1;
-	uint32_t end;
+	uint32_t offset_plus_len;
 
-	return !u32_add_overflow(offset, len, &end)
-		&& IN_RANGE(offset, 0, max_flash_offset)
-		&& IN_RANGE(end, 0, max_flash_offset);
+		/* (offset + len) must not overflow */
+	return !u32_add_overflow(offset, len, &offset_plus_len)
+		/* offset must be a valid offset in flash */
+		&& IN_RANGE(offset, 0, data->flash_size - 1)
+		/* (offset + len) must be in [0; flash size]
+		 * because it is equal to the last accessed
+		 * byte in flash plus one (an access of `len`
+		 * bytes starting at `offset` touches bytes
+		 * `offset` to `offset + len` EXCLUDED)
+		 */
+		&& IN_RANGE(end, 0, data->flash_size);
 }
 
 static bool is_writeable_flash_range(const struct device *dev,
@@ -256,7 +263,7 @@ int write_word_range(struct flash_wb0x_data *data, uint32_t start_word,
 			uint32_t num_words, const void *buf)
 {
 	const size_t WORDS_IN_BURST = 4;
-	uint32_t words_to_write = num_words;
+	uint32_t remaining = num_words;
 	uint32_t write_addr = start_word;
 	/**
 	 * Note that @p buf may not be aligned to 32-bit boundary.
@@ -267,13 +274,10 @@ int write_word_range(struct flash_wb0x_data *data, uint32_t start_word,
 	const uint32_t *src = buf;
 	int res = 0;
 
-	/**
-	 * 3 step process:
-	 *  - align to flash quadword with single WRITE commands
-	 *  - write flash quadwords using BURSTWRITE commands
-	 *  - finish trailing bytes with an adapted BURSTWRITE
+	/* TODO: take advantage of the BURSTWRITE command.
+	 * However, the last attempt at using it was a disaster...
 	 */
-	while ((write_addr % WORDS_IN_BURST) != 0) {
+	while (remaining > 0) {
 		FLASH->ADDRESS = write_addr;
 		FLASH->DATA0 = fetch_u32(src);
 
@@ -284,45 +288,10 @@ int write_word_range(struct flash_wb0x_data *data, uint32_t start_word,
 
 		src++;
 		write_addr++;
-		words_to_write--;
+		remaining--;
 	}
 
-	while (words_to_write >= WORDS_IN_BURST) {
-		FLASH->ADDRESS = write_addr;
-		FLASH->DATA0 = fetch_u32(src + 0);
-		FLASH->DATA1 = fetch_u32(src + 1);
-		FLASH->DATA2 = fetch_u32(src + 2);
-		FLASH->DATA3 = fetch_u32(src + 3);
-
-		res = execute_flash_command(data, FLASH_CMD_BURSTWRITE);
-		if (res < 0) {
-			return res;
-		}
-
-		src += WORDS_IN_BURST;
-		write_addr += WORDS_IN_BURST;
-		words_to_write -= WORDS_IN_BURST;
-	}
-
-	if (words_to_write > 0) {
-		FLASH->ADDRESS = write_addr;
-
-		for (uint32_t i = 0; i < 4; i++) {
-			uint32_t datax = 0xFFFFFFFF;
-
-			if (words_to_write > 0) {
-				datax = fetch_u32(src);
-
-				src++;
-				words_to_write--;
-			}
-			(&FLASH->DATA0)[i] = datax;
-		}
-
-		res = execute_flash_command(data, FLASH_CMD_BURSTWRITE);
-	}
-
-	__ASSERT_NO_MSG(words_to_write == 0);
+	__ASSERT_NO_MSG(remaining == 0);
 
 	return res;
 }
