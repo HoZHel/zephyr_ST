@@ -139,7 +139,7 @@ static bool is_valid_flash_range(const struct device *dev,
 		 * bytes starting at `offset` touches bytes
 		 * `offset` to `offset + len` EXCLUDED)
 		 */
-		&& IN_RANGE(end, 0, data->flash_size);
+		&& IN_RANGE(offset_plus_len, 0, data->flash_size);
 }
 
 static bool is_writeable_flash_range(const struct device *dev,
@@ -263,20 +263,19 @@ int write_word_range(struct flash_wb0x_data *data, uint32_t start_word,
 			uint32_t num_words, const void *buf)
 {
 	const size_t WORDS_IN_BURST = 4;
+	const uint32_t BURST_IGNORE_VALUE = 0xFFFFFFFF;
+	uint32_t dst_addr = start_word;
 	uint32_t remaining = num_words;
-	uint32_t write_addr = start_word;
 	/**
 	 * Note that @p buf may not be aligned to 32-bit boundary.
-	 * However, declaring src as uint32_t* makes the address
-	 * increment by 4 every time we do src++, which makes it
+	 * However, declaring src_ptr as uint32_t* makes the address
+	 * increment by 4 every time we do src_ptr++, which makes it
 	 * behave like the other counters in this function.
 	 */
-	const uint32_t *src = buf;
+	const uint32_t *src_ptr = buf;
 	int res = 0;
 
-	/* TODO: take advantage of the BURSTWRITE command.
-	 * However, the last attempt at using it was a disaster...
-	 */
+#if 0
 	while (remaining > 0) {
 		FLASH->ADDRESS = write_addr;
 		FLASH->DATA0 = fetch_u32(src);
@@ -290,6 +289,75 @@ int write_word_range(struct flash_wb0x_data *data, uint32_t start_word,
 		write_addr++;
 		remaining--;
 	}
+#else
+	/**
+	 * Write to flash is performed as a 3 step process:
+	 *  - write single words using WRITE commands until the write
+	 *    write address is aligned to flash quadword boundary
+	 *
+	 *  - after write address is aligned to quadword, we can use
+	 *    the BURSTWRITE commands to write 4 words at a time
+	 *
+	 *  - once less than 4 words remain to write, a last BURSTWRITE
+	 *    is used with unneeded DATAx registers filled with 0xFFFFFFFF
+	 *    (this makes BURSTWRITE ignore write to these addresses)
+	 */
+
+	/* (1) Align to quadword boundary with WRITE commands */
+	while (remaining > 0 && (dst_addr % WORDS_IN_BURST) != 0) {
+		FLASH->ADDRESS = dst_addr;
+		FLASH->DATA0 = fetch_u32(src_ptr);
+
+		res = execute_flash_command(data, FLASH_CMD_WRITE);
+		if (res < 0) {
+			return res;
+		}
+
+		src_ptr++;
+		dst_addr++;
+		remaining--;
+	}
+
+	/* (2) Write bursts of quadwords */
+	while (remaining >= WORDS_IN_BURST) {
+		FLASH->ADDRESS = dst_addr;
+		FLASH->DATA0 = fetch_u32(src_ptr + 0);
+		FLASH->DATA1 = fetch_u32(src_ptr + 1);
+		FLASH->DATA2 = fetch_u32(src_ptr + 2);
+		FLASH->DATA3 = fetch_u32(src_ptr + 3);
+
+		res = execute_flash_command(data, FLASH_CMD_BURSTWRITE);
+		if (res < 0) {
+			return res;
+		}
+
+		src_ptr += WORDS_IN_BURST;
+		dst_addr += WORDS_IN_BURST;
+		remaining -= WORDS_IN_BURST;
+	}
+
+	/* (3) Write trailing (between 1 and 3 words) */
+	if (remaining > 0) {
+		__ASSERT_NO_MSG(remaining < WORDS_IN_BURST);
+
+		FLASH->ADDRESS = dst_addr;
+		FLASH->DATA0 = fetch_u32(src_ptr + 0);
+
+		FLASH->DATA1 = (remaining >= 2)
+			? fetch_u32(src_ptr + 1)
+			: BURST_IGNORE_VALUE;
+
+		FLASH->DATA2 = (remaining == 3)
+			? fetch_u32(src_ptr + 2)
+			: BURST_IGNORE_VALUE;
+
+		FLASH->DATA3 = BURST_IGNORE_VALUE;
+
+		remaining = 0;
+
+		res = execute_flash_command(data, FLASH_CMD_BURSTWRITE);
+	}
+#endif
 
 	__ASSERT_NO_MSG(remaining == 0);
 
